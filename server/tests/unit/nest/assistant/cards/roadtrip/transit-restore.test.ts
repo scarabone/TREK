@@ -92,6 +92,7 @@ describe('transit itinerary restore', () => {
 
     const held = { dayId: 3, from, to, itinerary: told('2026-10-01T08:04:00+02:00', ['RE 4']) };
     const next = sessionWith(found, shelves.of(7, 1));
+    await next.session.call('use_addon_tools', { groups: ['roadtrip'] });
     expect(next.session.pinArgs('create_transit_journey', held)).toEqual({ args: held });
     expect(JSON.stringify(next.session.pinArgs('create_transit_journey', held))).not.toMatch(/geometry/);
     await next.session.call('create_transit_journey', held);

@@ -403,6 +403,22 @@ describe('an assistant tool session', () => {
     }
   });
 
+  it('ASTTOOL-016: a tool of a group not loaded this turn is refused until the model loads the group', async () => {
+    const { userId, tripId } = await ownerWithTrips();
+    const session = await tools.open(userId, tripId);
+    try {
+      expect(session.specs().map((spec) => spec.name)).not.toContain('get_tour_plan');
+      expect(session.pinArgs('get_tour_plan', { placeId: '530' })).toEqual({
+        error: expect.stringContaining('use_addon_tools with groups ["tours"]'),
+      });
+      expect(session.pinArgs('list_places', {})).toEqual({ args: {} });
+      await session.call('use_addon_tools', { groups: ['tours'] });
+      expect(session.pinArgs('get_tour_plan', { placeId: 530 })).toEqual({ args: { placeId: 530 } });
+    } finally {
+      await session.close();
+    }
+  });
+
   it('ASTTOOL-014: an undo session holds its target and nothing else', async () => {
     const { userId, tripId } = await ownerWithTrips();
     const session = await tools.open(userId, tripId, new Set(['delete_place']));

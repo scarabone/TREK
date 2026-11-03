@@ -320,9 +320,16 @@ export class AssistantToolSession {
   /**
    * The model's arguments as they are shown and stored: the trip, the forced
    * and the stripped arguments taken out. A trip id other than this
-   * conversation's is refused.
+   * conversation's is refused, and so is a tool of a group not loaded this
+   * turn: the model was never offered its schema and would guess its arguments.
    */
   pinArgs(name: string, args: ToolArgs): { args: ToolArgs } | { error: string } {
+    const group = this.tools.get(name)?.hint.group;
+    if (this.grouped && group && !this.loaded.has(group)) {
+      return {
+        error: `${name} belongs to the ${group} tools, which are not loaded in this turn. Call ${USE_TOOLS_TOOL} with groups ["${group}"] first, then call ${name} again with the arguments its schema lists.`,
+      };
+    }
     const given = pinNamesOf(this.pinArg).filter((key) => args[key] !== undefined);
     if (given.some((key) => Number(args[key]) !== this.pinnedId)) {
       const about = this.pinArg === PINNED_ARG ? 'trip' : 'journey';
