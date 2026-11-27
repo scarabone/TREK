@@ -13,6 +13,8 @@ For addon-gated tools (Packing, To-Dos, Atlas, Collab, Collections, Vacay, Journ
 | Tool | Description |
 |---|---|
 | `get_trip_summary` | Full denormalized snapshot of a trip — metadata, members, days with assignments and notes, accommodations, budget, packing, reservations, collab notes, and to-dos in one call. Use this as your context loader before making changes. |
+| `get_day_plan` | One day of a trip, small enough to read aloud: the planned places in order with their times, the bookings that start or end that day (times, length, place or the ends of a ride, notes), the hotel for that night with its check-in and check-out, the port of a cruise on that date, and the day notes. Leave `tripId` out to use the trip whose days include the `date`. Booking references, prices, travellers, `other` bookings and note sentences about money, refunds, references or cabins are left out. Requires `trips:read` and `reservations:read`. |
+| `find_booking` | The bookings whose title or kind holds a few words (`query`), still-to-come first, at most five, each with its date, times, place and notes, redacted as `get_day_plan` is. Leave `tripId` out to search every trip that is not archived. Requires `trips:read` and `reservations:read`. |
 
 ### Compound tools
 

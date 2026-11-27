@@ -35,3 +35,32 @@ export type ListReservationsRequest = z.infer<typeof listReservationsRequestSche
 /** `list_accommodations`: where the trip sleeps, stay by stay. */
 export const listAccommodationsRequestSchema = z.object({ tripId: idSchema });
 export type ListAccommodationsRequest = z.infer<typeof listAccommodationsRequestSchema>;
+
+/** A calendar date as the day plan stores it, `YYYY-MM-DD`. */
+const dayDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a date as YYYY-MM-DD')
+  .describe('The date, YYYY-MM-DD.');
+
+const tripOfDateSchema = idSchema
+  .optional()
+  .describe('The trip. Left out, the trip the caller can see whose days include the date.');
+
+/** `get_day_plan`: one day of a trip, read for a guide that speaks it aloud. */
+export const getDayPlanRequestSchema = z.object({
+  date: dayDateSchema,
+  tripId: tripOfDateSchema,
+});
+export type GetDayPlanRequest = z.infer<typeof getDayPlanRequestSchema>;
+
+/** `find_booking`: the bookings whose title matches a few words, soonest first. */
+export const findBookingRequestSchema = z.object({
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .describe('Words from the booking title or its kind, such as "Windsor" or "Rhine cruise".'),
+  tripId: idSchema.optional().describe('The trip. Left out, every trip the caller can see that is not archived.'),
+});
+export type FindBookingRequest = z.infer<typeof findBookingRequestSchema>;
