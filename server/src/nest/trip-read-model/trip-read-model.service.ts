@@ -100,6 +100,11 @@ export class TripReadModelService {
     };
   }
 
+  /** The trips a user owns or is a member of, archived ones included, as the trip list reads them. */
+  async tripsOf(userId: number) {
+    return await this.tripsRepo.listForUser(userId, null);
+  }
+
   // ── Bundle / notifications (route helpers) ────────────────────────────────
 
   /**

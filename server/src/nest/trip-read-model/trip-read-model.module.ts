@@ -10,6 +10,8 @@ import { PlacesModule } from '../places/places.module';
 import { ReservationsModule } from '../reservations/reservations.module';
 import { TodoModule } from '../todo/todo.module';
 import { TripMembersModule } from '../trip-members/trip-members.module';
+import { DayPlanMcp } from './day-plan.mcp';
+import { DayPlanService } from './day-plan.service';
 import { TripReadModelService } from './trip-read-model.service';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
@@ -36,7 +38,8 @@ import { Module } from '@nestjs/common';
     FilesModule,
     AddonsModule,
   ],
-  providers: [TripReadModelService],
+  // DayPlanMcp: the day and booking reads a voice guide makes in place of the whole summary.
+  providers: [TripReadModelService, DayPlanService, DayPlanMcp],
   exports: [TripReadModelService],
 })
 export class TripReadModelModule {}
