@@ -419,13 +419,15 @@ describe('getSynologyAlbumPhotos', () => {
   });
 
   it('SYNO-U064: orders the album by capture time, newest first', async () => {
-    safeFetch.mockResolvedValue(
-      api({
-        list: [
-          { id: 1, time: 1700000000, additional: { thumbnail: { cache_key: 'older' } } },
-          { id: 2, time: 1800000000, additional: { thumbnail: { cache_key: 'newer' } } },
-        ],
-      }),
+    safeFetch.mockImplementation(async (url: string) =>
+      String(url).includes('FotoTeam')
+        ? api({ list: [] })
+        : api({
+            list: [
+              { id: 1, time: 1700000000, additional: { thumbnail: { cache_key: 'older' } } },
+              { id: 2, time: 1800000000, additional: { thumbnail: { cache_key: 'newer' } } },
+            ],
+          }),
     );
 
     const assets = ((await svc.getSynologyAlbumPhotos(USER, '7')) as { data: { assets: { id: string }[] } }).data
@@ -470,13 +472,15 @@ describe('the search order', () => {
     // SYNO.Foto.Search.Search documents no sort_by, and _fetchSynologyJson maps
     // every app code except 106/107/119 onto a 400, so a rejected parameter would
     // take search down for that user entirely. Ordering happens here instead.
-    safeFetch.mockResolvedValue(
-      api({
-        list: [
-          { id: 1, time: 1700000000, additional: { thumbnail: { cache_key: 'older' } } },
-          { id: 2, time: 1800000000, additional: { thumbnail: { cache_key: 'newer' } } },
-        ],
-      }),
+    safeFetch.mockImplementation(async (url: string) =>
+      String(url).includes('FotoTeam')
+        ? api({ list: [] })
+        : api({
+            list: [
+              { id: 1, time: 1700000000, additional: { thumbnail: { cache_key: 'older' } } },
+              { id: 2, time: 1800000000, additional: { thumbnail: { cache_key: 'newer' } } },
+            ],
+          }),
     );
 
     const result = await svc.searchSynologyPhotos(USER);
@@ -485,6 +489,65 @@ describe('the search order', () => {
     expect(assets.map((a) => a.id)).toEqual(['newer', 'older']);
     const body = String((safeFetch.mock.calls[0][1] as { body: URLSearchParams }).body);
     expect(body).not.toContain('sort_by');
+  });
+});
+
+describe('the Shared Space', () => {
+  const byApi = (personal: unknown, team: unknown) =>
+    safeFetch.mockImplementation(async (url: string) => (String(url).includes('FotoTeam') ? team : personal));
+  const ids = (r: unknown) => (r as { data: { assets: { id: string }[] } }).data.assets.map((a) => a.id);
+
+  it('SYNO-U066: search covers the Shared Space too, its ids marked so later calls reach the right space', async () => {
+    byApi(
+      api({ list: [{ id: 1, time: 1700000000, additional: { thumbnail: { cache_key: '5_1' } } }] }),
+      api({ list: [{ id: 9, time: 1800000000, additional: { thumbnail: { cache_key: '9_2' } } }] }),
+    );
+
+    const result = await svc.searchSynologyPhotos(USER, '2024-06-12', '2024-06-19', 0, 1);
+
+    expect(ids(result)).toEqual(['t9_2', '5_1']);
+    expect((result as { data: { hasMore: boolean } }).data.hasMore).toBe(true);
+    const apis = safeFetch.mock.calls.map((c) =>
+      new URLSearchParams(String((c[1] as { body: URLSearchParams }).body)).get('api'),
+    );
+    expect(apis).toEqual(['SYNO.Foto.Search.Search', 'SYNO.FotoTeam.Search.Search']);
+  });
+
+  it('SYNO-U067: a Shared Space the account cannot read leaves the personal results standing', async () => {
+    byApi(api({ list: [{ id: 1, time: 1700000000, additional: { thumbnail: { cache_key: '5_1' } } }] }), apiError(105));
+
+    const result = await svc.searchSynologyPhotos(USER);
+
+    expect(ids(result)).toEqual(['5_1']);
+  });
+
+  it('SYNO-U068: a marked id is read from FotoTeam by its bare unit and keeps its mark', async () => {
+    safeFetch.mockResolvedValueOnce(
+      api({ list: [{ id: 27824, time: 1718796020, additional: { thumbnail: { cache_key: '27824_1718814020' } } }] }),
+    );
+
+    const result = await svc.getSynologyAssetInfo(USER, 't27824_1718814020', USER);
+
+    const body = new URLSearchParams(String((safeFetch.mock.calls[0][1] as { body: URLSearchParams }).body));
+    expect(body.get('api')).toBe('SYNO.FotoTeam.Browse.Item');
+    expect(body.get('id')).toBe('[27824]');
+    expect((result as { data: { id: string } }).data.id).toBe('t27824_1718814020');
+  });
+
+  it('SYNO-U069: a marked id fetches its thumbnail from FotoTeam with the bare cache key', async () => {
+    safeFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new Uint8Array([1]).buffer,
+    });
+
+    await svc.fetchSynologyThumbnailBytes(USER, USER, 't27824_1718814020');
+
+    const url = new URL(String(safeFetch.mock.calls.at(-1)![0]));
+    expect(url.searchParams.get('api')).toBe('SYNO.FotoTeam.Thumbnail');
+    expect(url.searchParams.get('id')).toBe('27824');
+    expect(url.searchParams.get('cache_key')).toBe('27824_1718814020');
   });
 });
 
