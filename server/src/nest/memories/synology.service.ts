@@ -27,6 +27,11 @@ const SYNOLOGY_PROVIDER = 'synologyphotos';
 const SYNOLOGY_ENDPOINT_PATH = '/webapi/entry.cgi';
 
 const SYNOLOGY_DEVICE_NAME = 'trek';
+// Synology Photos keeps the Shared Space behind its own API family with its own ids.
+const SYNOLOGY_TEAM_PREFIX = 't';
+const SYNOLOGY_TEAM_SEARCH_API = 'SYNO.FotoTeam.Search.Search';
+const SYNOLOGY_TEAM_ITEM_API = 'SYNO.FotoTeam.Browse.Item';
+const SYNOLOGY_TEAM_THUMBNAIL_API = 'SYNO.FotoTeam.Thumbnail';
 
 // A cached thumbnail read: Synology's 'm' size is a few hundred kilobytes, so
 // eight megabytes is room to spare, and the NAS is a user-configured host that
@@ -294,13 +299,14 @@ export class SynologyService {
     return result;
   }
 
-  private _normalizeSynologyPhotoInfo(item: SynologyPhotoItem): AssetInfo {
+  private _normalizeSynologyPhotoInfo(item: SynologyPhotoItem, team = false): AssetInfo {
     const address = item.additional?.address || {};
     const exif = item.additional?.exif || {};
     const gps = item.additional?.gps || {};
 
+    const cacheKey = String(item.additional?.thumbnail?.cache_key || '');
     return {
-      id: String(item.additional?.thumbnail?.cache_key || ''),
+      id: cacheKey && team ? `${SYNOLOGY_TEAM_PREFIX}${cacheKey}` : cacheKey,
       takenAt: item.time ? new Date(item.time * 1000).toISOString() : null,
       city: address.city || null,
       country: address.country || null,
@@ -330,12 +336,18 @@ export class SynologyService {
     await this.synologyRepo.clearSynologySession(userId);
   }
 
-  private _splitPackedSynologyId(rawId: string): { id: string; cacheKey: string; assetId: string } | null {
+  private _splitPackedSynologyId(
+    rawId: string,
+  ): { id: string; cacheKey: string; assetId: string; team: boolean } | null {
     // cache_key format from Synology is "{unit_id}_{timestamp}", e.g. "40808_1633659236".
     // The first segment must be a non-empty integer (the unit ID used for API calls).
-    if (!/^\d+_.+$/.test(rawId)) return null;
-    const id = rawId.split('_')[0];
-    return { id, cacheKey: rawId, assetId: rawId };
+    // A Shared Space photo carries a "t" in front ("t40808_1633659236"): its unit ids
+    // are a separate series and are only valid against the SYNO.FotoTeam.* APIs.
+    if (!/^t?\d+_.+$/.test(rawId)) return null;
+    const team = rawId.startsWith(SYNOLOGY_TEAM_PREFIX);
+    const cacheKey = team ? rawId.slice(SYNOLOGY_TEAM_PREFIX.length) : rawId;
+    const id = cacheKey.split('_')[0];
+    return { id, cacheKey, assetId: rawId, team };
   }
 
   private async _getSynologySession(userId: number): Promise<ServiceResult<string>> {
@@ -705,22 +717,36 @@ export class SynologyService {
 
     // SYNO.Foto.Search.Search list_item does not return a total count — only data.list.
     // hasMore is inferred: if we got a full page, there may be more.
+    // The personal space and then the Shared Space (SYNO.FotoTeam) are searched with
+    // the same window and offset, so paging walks both. One after the other, so a
+    // dead SID is renewed once rather than by two racing logins. A personal-space
+    // failure fails the search as before; a Shared Space the account cannot read
+    // only drops its half.
     const result = await this._requestSynologyApi<{ list: SynologyPhotoItem[] }>(userId, params);
     if (!result.success) return result as ServiceResult<AssetsList>;
+    const teamResult = await this._requestSynologyApi<{ list: SynologyPhotoItem[] }>(userId, {
+      ...params,
+      api: SYNOLOGY_TEAM_SEARCH_API,
+    });
 
-    const allItems = result.data.list || [];
+    const personalItems = result.data.list || [];
+    const teamItems = teamResult.success ? teamResult.data.list || [] : [];
+    const allItems = [...personalItems, ...teamItems];
     // Deliberately no sort parameter upstream, on this path or the album one.
     // Synology documents none for Search.Search, and _fetchSynologyJson maps
     // every app code except 106/107/119 onto a 400 — a parameter one DSM build
     // rejects would take listing down entirely for that user. Both paths read
     // every page anyway, so ordering the mapped result costs nothing and
     // cannot fail.
-    const assets = sortAssetsByTakenAtDesc(allItems.map((item) => this._normalizeSynologyPhotoInfo(item)));
+    const assets = sortAssetsByTakenAtDesc([
+      ...personalItems.map((item) => this._normalizeSynologyPhotoInfo(item)),
+      ...teamItems.map((item) => this._normalizeSynologyPhotoInfo(item, true)),
+    ]);
 
     return success({
       assets,
       total: allItems.length,
-      hasMore: allItems.length === limit,
+      hasMore: personalItems.length === limit || teamItems.length === limit,
     });
   }
 
@@ -746,15 +772,17 @@ export class SynologyService {
     // both are asked in turn, and only an item whose own thumbnail is this unit
     // counts: never a neighbour's capture time or GPS.
     const unit = Number(parsedId.id);
-    const own = await this._readItemOfUnit(targetUserId, unit, parsedId.id, passphrase);
+    const own = await this._readItemOfUnit(targetUserId, unit, parsedId.id, passphrase, parsedId.team);
     // The neighbour only when the library answered with another photo: a failed
     // call (an unreachable NAS) is passed on, not repeated against the next id.
     const found =
-      own.success && !own.data ? await this._readItemOfUnit(targetUserId, unit + 1, parsedId.id, passphrase) : own;
+      own.success && !own.data
+        ? await this._readItemOfUnit(targetUserId, unit + 1, parsedId.id, passphrase, parsedId.team)
+        : own;
     if (!found.success) return found as ServiceResult<AssetInfo>;
     if (!found.data) return fail('Photo not found', 404);
 
-    const normalized = this._normalizeSynologyPhotoInfo(found.data);
+    const normalized = this._normalizeSynologyPhotoInfo(found.data, parsedId.team);
     normalized.id = photoId;
     return success(normalized);
   }
@@ -768,9 +796,10 @@ export class SynologyService {
     itemId: number,
     unitId: string,
     passphrase?: string,
+    team = false,
   ): Promise<ServiceResult<SynologyPhotoItem | null>> {
     const infoParams: ApiCallParams = {
-      api: 'SYNO.Foto.Browse.Item',
+      api: team ? SYNOLOGY_TEAM_ITEM_API : 'SYNO.Foto.Browse.Item',
       method: 'get',
       version: 5,
       id: `[${itemId}]`,
@@ -809,7 +838,7 @@ export class SynologyService {
     if (!sid.data) return { error: 'Session ID missing', status: 500 };
 
     const params = new URLSearchParams({
-      api: 'SYNO.Foto.Thumbnail',
+      api: parsedId.team ? SYNOLOGY_TEAM_THUMBNAIL_API : 'SYNO.Foto.Thumbnail',
       method: 'get',
       version: '2',
       mode: 'download',
@@ -881,7 +910,7 @@ export class SynologyService {
     // the journey grid on retina screens.
     const resolvedSize = kind === 'original' ? 'xl' : size || 'm';
     const params = new URLSearchParams({
-      api: 'SYNO.Foto.Thumbnail',
+      api: parsedId.team ? SYNOLOGY_TEAM_THUMBNAIL_API : 'SYNO.Foto.Thumbnail',
       method: 'get',
       version: '2',
       mode: 'download',
